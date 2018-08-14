@@ -1,0 +1,191 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates two VPCs connected by a VPC endpoint
+
+####################
+Parameters:
+  VpcEndpointConnectionApprovers:
+    Type: CommaDelimitedList
+    Description: Comma-delimited list of IAM ARNs who can approve connection requests to the VPC endpoint service
+  aCidrBlock:
+    Type: String
+    Description: IP range for aVPC
+    Default: 10.11.0.0/16
+  bCidrBlock:
+    Type: String
+    Description: IP range for bVPC
+    Default: 10.12.0.0/16
+  AvailabilityZone:
+    Type: String
+    Description: AZ for subnets, as VPC endpoints require AZ alignment
+    Default: us-east-1a
+  RedshiftMasterUsername:
+    Type: String
+    Default: admin
+  RedshiftMasterUserPassword:
+    Type: String
+    Default: Password1
+  RedshiftDBName:
+    Type: String
+    Default: test
+
+####################
+Resources:
+  # VPC "A" with a single public subnet
+  aVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref aCidrBlock
+
+  aInternetGateway:
+    Type: AWS::EC2::InternetGateway
+          
+  aVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref aInternetGateway
+      VpcId: !Ref aVPC
+
+  aSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref aVPC
+      CidrBlock: !GetAtt aVPC.CidrBlock
+      AvailabilityZone: !Ref AvailabilityZone
+      MapPublicIpOnLaunch: true
+
+  aRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref aVPC
+
+  aRoute:
+    Type: AWS::EC2::Route
+    DependsOn: aInternetGateway
+    Properties:
+      RouteTableId: !Ref aRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref aInternetGateway
+
+  aSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref aSubnet
+      RouteTableId: !Ref aRouteTable
+
+  aVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Sub com.amazonaws.vpce.${AWS::Region}.${bVPCEndPointService}
+      VpcId: !Ref aVPC
+      SubnetIds: # This causes an ENI to get created in aVPC's aSubnet
+        - !Ref aSubnet
+
+  # VPC "B" with a single private subnet and a small Redshift cluster
+  bVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref bCidrBlock
+
+  bInternetGateway:
+    Type: AWS::EC2::InternetGateway
+          
+  bVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref bInternetGateway
+      VpcId: !Ref bVPC
+
+  bSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref bVPC
+      CidrBlock: !GetAtt bVPC.CidrBlock
+      AvailabilityZone: !Ref AvailabilityZone
+      MapPublicIpOnLaunch: true
+
+  bRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref bVPC
+
+  bRoute:
+    Type: AWS::EC2::Route
+    DependsOn: bInternetGateway
+    Properties:
+      RouteTableId: !Ref bRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref bInternetGateway
+
+  bSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref bSubnet
+      RouteTableId: !Ref bRouteTable
+
+  bSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Inbound to Redshift
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: 5439
+        ToPort: 5439
+        IpProtocol: tcp
+      VpcId:
+        Ref: bVPC
+
+  bNetworkLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: network
+      Scheme: internal
+      Subnets:
+        - !Ref bSubnet
+
+  bVPCEndPointService:
+    Type: AWS::EC2::VPCEndpointService
+    Properties:
+      NetworkLoadBalancerArns:
+        - !Ref bNetworkLoadBalancer
+
+  bVPCEndpointServicePermission:
+    Type: AWS::EC2::VPCEndpointServicePermissions
+    Properties:
+      AllowedPrincipals: !Ref VpcEndpointConnectionApprovers
+      ServiceId: !Ref bVPCEndPointService
+
+  bRedshiftClusterSubnetGroup:
+    Type: AWS::Redshift::ClusterSubnetGroup
+    DependsOn: bSubnet
+    Properties:
+      Description: Contains the bSubnet within the bVPC
+      SubnetIds:
+        - !Ref bSubnet
+
+  bRedshiftCluster:
+    Type: AWS::Redshift::Cluster
+    Properties:
+      ClusterSubnetGroupName: !Ref bRedshiftClusterSubnetGroup
+      ClusterType: single-node
+      NodeType: dc1.large
+      DBName: !Ref RedshiftDBName
+      MasterUsername: !Ref RedshiftMasterUsername
+      MasterUserPassword: !Ref RedshiftMasterUserPassword
+      PubliclyAccessible: true
+      VpcSecurityGroupIds:
+        - !Ref bSecurityGroup
+
+####################
+Outputs:
+  bVPC:
+    Description: The ID of bVPC
+    Value: !Ref bVPC
+    Export:
+      Name: !Sub ${AWS::StackName}-bVPC
+
+  bNetworkLoadBalancer:
+    Description: ID of the NLB
+    Value: !Ref bNetworkLoadBalancer
+    Export:
+      Name: !Sub ${AWS::StackName}-bNetworkLoadBalancer

@@ -1,0 +1,39 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Adds a target group and a listener to the main stack
+
+####################
+Parameters:
+  MainStackName:
+    Type: String
+    Description: The stack name containing the VPCs and Redshift cluster
+  RedshiftPrivateIP:
+    Type: String
+    Description: The private IP address of the Redshift node you want to target
+
+####################
+Resources:
+  bTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue:
+          !Sub ${MainStackName}-bVPC
+      TargetType: ip
+      Protocol: TCP
+      Port: 5439
+      HealthCheckPort: 5439
+      Targets:
+        - Id: !Ref RedshiftPrivateIP
+          Port: 5439
+
+  bListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref bTargetGroup
+      LoadBalancerArn:
+        Fn::ImportValue:
+          !Sub ${MainStackName}-bNetworkLoadBalancer
+      Protocol: TCP
+      Port: 5439
