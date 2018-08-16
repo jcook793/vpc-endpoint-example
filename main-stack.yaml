@@ -16,7 +16,7 @@ Parameters:
     Default: 10.12.0.0/16
   AvailabilityZone:
     Type: String
-    Description: AZ for subnets, as VPC endpoints require AZ alignment
+    Description: AZ for subnets in both VPCs, as VPC endpoints require AZ alignment
     Default: us-east-1a
   RedshiftMasterUsername:
     Type: String
@@ -72,6 +72,17 @@ Resources:
       SubnetId: !Ref aSubnet
       RouteTableId: !Ref aRouteTable
 
+  aSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Inbound to VPC endpoint interface
+      VpcId: !Ref aVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          CidrIp: !Ref aCidrBlock
+          FromPort: 5439
+          ToPort: 5439
+
   aVPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -80,6 +91,8 @@ Resources:
       VpcId: !Ref aVPC
       SubnetIds: # This causes an ENI to get created in aVPC's aSubnet
         - !Ref aSubnet
+      SecurityGroupIds:
+        - !Ref aSecurityGroup
 
   # VPC "B" with a single private subnet and a small Redshift cluster
   bVPC:
